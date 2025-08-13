@@ -43,7 +43,7 @@ def classify_record(zh_clf, en_clf, title: str, summary: str):
         else:
             out = en_clf(text[:512])
             if isinstance(out, list):
-                best = sorted(out, key=lambda x: -float(x["score"]))[0]
+                best = sorted(out, key=lambda x: -float(x.get("score", 0.0)))[0]
             else:
                 best = out
             label = str(best.get("label", "")).lower()  # positive/negative/neutral
@@ -79,7 +79,10 @@ if run:
     for t in symbols:
         try:
             news = yf.Ticker(t).news or []
-            news_raw.extend(news)
+            # yfinance 可能返回非 list 或包含非 dict 物件
+            for item in news:
+                if isinstance(item, dict):
+                    news_raw.append(item)
             time.sleep(0.2)
         except Exception as e:
             st.warning(f"[警告] 無法抓取 {t} 新聞：{e}")
@@ -88,36 +91,66 @@ if run:
         st.error("抓不到任何新聞，請稍後再試或更換 Ticker。")
         st.stop()
 
-    df = pd.DataFrame(news_raw).drop_duplicates(subset=["uuid"]).reset_index(drop=True)
+    # 防禦性建立 DataFrame：補齊缺失欄位
+    def safe_get(d, k, default=None):
+        try:
+            return d.get(k, default)
+        except Exception:
+            return default
+
+    rows = []
+    for it in news_raw:
+        rows.append({
+            "uuid": safe_get(it, "uuid", None),
+            "providerPublishTime": safe_get(it, "providerPublishTime", None),
+            "title": safe_get(it, "title", ""),
+            "link": safe_get(it, "link", ""),
+            "publisher": safe_get(it, "publisher", ""),
+            "summary": safe_get(it, "summary", ""),
+        })
+    df = pd.DataFrame(rows)
+
+    # 去重：若無 uuid 就不使用該欄位去重
+    subset_cols = [c for c in ["uuid", "title", "link"] if c in df.columns]
+    if subset_cols:
+        df = df.drop_duplicates(subset=subset_cols).reset_index(drop=True)
+    else:
+        df = df.reset_index(drop=True)
+
+    # 時間轉換 + 過濾
     df["published"] = df["providerPublishTime"].apply(to_dt)
-    df["title"] = df["title"].astype(str)
-    df["link"] = df["link"].astype(str)
-    df["publisher"] = df.get("publisher", pd.Series([""] * len(df))).astype(str)
-    df["summary"] = df.get("summary", pd.Series([""] * len(df))).astype(str)
-
     cut = dt.datetime.now().astimezone() - dt.timedelta(days=int(lookback_days))
-    df = df[df["published"] >= cut].copy()
+    df = df[df["published"].notna() & (df["published"] >= cut)].copy()
 
+    # 關鍵字過濾（標題或摘要）
+    df["title"] = df["title"].astype(str)
+    df["summary"] = df["summary"].astype(str)
     kw = re.compile(r"(台積電|台积电|TSMC|2330)", re.IGNORECASE)
     df = df[df["title"].str.contains(kw) | df["summary"].str.contains(kw)].copy()
 
-    st.write(f"共擷取到 **{len(df)}** 則符合條件的新聞。")
-    if len(df) == 0: st.stop()
+    total = len(df)
+    st.write(f"共擷取到 **{total}** 則符合條件的新聞。")
+    if total == 0:
+        st.stop()
 
     with st.spinner("載入情緒模型…（第一次較久）"):
         zh_clf, en_clf = get_pipelines(device=-1)
 
     labels, scores, errs = [], [], []
     for _, r in df.iterrows():
-        label, score, err = classify_record(zh_clf, en_clf, r["title"], r["summary"])
+        label, score, err = classify_record(zh_clf, en_clf, r.get("title",""), r.get("summary",""))
         labels.append(label); scores.append(score); errs.append(err)
     df["label"] = labels; df["score"] = scores; df["error"] = errs
     df = df[df["label"].notna()].copy()
 
+    if df.empty:
+        st.warning("推論後沒有可用樣本（可能所有內容都失敗或為空）。")
+        st.stop()
+
     df["sent_num"] = df["label"].map(sent_to_num) * df["score"]
 
     now = dt.datetime.now().astimezone()
-    df["w"] = df["published"].apply(lambda ts: time_decay(ts, now, half_life))
+    df["w"] = df["published"].apply(lambda ts: time_decay(ts, now, half_life) if pd.notna(ts) else 1.0)
     df["weighted_sent"] = df["sent_num"] * df["w"]
 
     cutN = now - dt.timedelta(days=int(week_days))
@@ -156,7 +189,7 @@ if run:
 
     st.divider()
     st.subheader("明細（可排序）")
-    show_cols = ["published","publisher","label","score","sent_num","w","weighted_sent","title","link"]
+    show_cols = [c for c in ["published","publisher","label","score","sent_num","w","weighted_sent","title","link"] if c in dfN.columns]
     st.dataframe(dfN.sort_values("published", ascending=False)[show_cols], use_container_width=True)
 
     st.download_button(
