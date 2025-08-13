@@ -16,11 +16,17 @@ st.write("""
 st.markdown("---")
 st.subheader("如何使用")
 st.markdown("""
-1. 左側的 **Pages** 切換分頁。  
-2. 依頁面提示設定參數（Ticker、抓取天數、API Key 或上傳 CSV 等）。  
-3. 直接在雲端（Streamlit Cloud）或本機執行。
-
-建議環境：Python 3.10+，並啟用雲端 GPU（若要快速載入模型）。
+1. 請確認你是從**專案根目錄**啟動：`streamlit run Home.py`（根目錄要有 `pages/` 資料夾）。  
+2. 若左側沒有出現 Pages 導覽，可能是資料夾層級不正確，或 Streamlit 版本過舊。  
+3. 你也可以用下方的**直接連結**切換分頁（需要 Streamlit ≥ 1.22）。
 """)
 
-st.info("請切換到左側『Pages』的分頁開始使用。")
+# 額外保險：直接提供分頁連結（即使側邊的 Pages 導覽未顯示，一樣能切換）
+st.markdown("### 直接連結")
+col1, col2 = st.columns(2)
+with col1:
+    st.page_link("pages/1_TSMC_News_Sentiment.py", label="📈 TSMC / 台積電｜新聞情緒", icon="📈")
+with col2:
+    st.page_link("pages/2_Grand_Hotel_Reviews.py", label="🏨 圓山大飯店｜住宿評論情緒", icon="🏨")
+
+st.info("若仍看不到分頁導覽，請確認資料夾名稱為 **pages/**（小寫），且檔案副檔名為 .py。")
